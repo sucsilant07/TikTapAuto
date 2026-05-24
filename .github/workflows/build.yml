@@ -27,11 +27,8 @@ jobs:
         with:
           gradle-version: '8.6'
 
-      - name: Generar Gradle Wrapper
-        run: gradle wrapper --gradle-version 8.6
-
       - name: Compilar APK debug
-        run: ./gradlew assembleDebug
+        run: gradle assembleDebug
 
       - name: Publicar Release con el APK
         uses: softprops/action-gh-release@v2
