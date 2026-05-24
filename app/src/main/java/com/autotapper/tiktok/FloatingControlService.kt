@@ -46,6 +46,7 @@ class FloatingControlService : Service() {
             .build()
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     private fun showFloatingButton() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         floatingView  = LayoutInflater.from(this).inflate(R.layout.floating_control, null)
@@ -61,7 +62,6 @@ class FloatingControlService : Service() {
             x = 20; y = 300
         }
 
-        @SuppressLint("ClickableViewAccessibility")
         floatingView.findViewById<ImageButton>(R.id.btn_stop).setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
