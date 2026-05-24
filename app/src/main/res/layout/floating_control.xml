@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content">
+
+    <ImageButton
+        android:id="@+id/btn_stop"
+        android:layout_width="62dp"
+        android:layout_height="62dp"
+        android:src="@android:drawable/ic_delete"
+        android:background="@drawable/circle_button"
+        android:contentDescription="Detener tap tap"
+        android:scaleType="centerInside"
+        android:padding="14dp"
+        android:elevation="10dp" />
+
+</FrameLayout>

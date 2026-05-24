@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TikTap Auto</string>
+    <string name="accessibility_service_label">TikTap Auto — Tap Tap automático</string>
+    <string name="accessibility_service_description">Permite a TikTap Auto hacer doble toque automático en la pantalla para enviar corazones en TikTok Live sin necesidad de tocarlo manualmente.</string>
+</resources>

@@ -1,0 +1,46 @@
+name: Compilar APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:   # también se puede lanzar manualmente desde GitHub
+
+permissions:
+  contents: write      # necesario para crear el Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.6'
+
+      - name: Compilar APK debug
+        run: ./gradlew assembleDebug
+
+      - name: Publicar Release con el APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "TikTap Auto — Descarga aquí"
+          files: app/build/outputs/apk/debug/app-debug.apk
+          body: |
+            ## Cómo instalar
+            1. Descarga el archivo `app-debug.apk`
+            2. En tu Android ve a **Ajustes → Seguridad → Fuentes desconocidas** (o "Instalar apps desconocidas") y actívalo
+            3. Abre el APK descargado e instala
+            4. Activa el **Servicio de accesibilidad** cuando la app lo pida
+            5. ¡Listo! Abre un TikTok Live y pulsa INICIAR TAP TAP
+          make_latest: true
