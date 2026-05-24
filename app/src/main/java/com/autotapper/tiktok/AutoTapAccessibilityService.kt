@@ -10,6 +10,7 @@ import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
+import kotlin.random.Random
 
 class AutoTapAccessibilityService : AccessibilityService() {
 
@@ -33,8 +34,14 @@ class AutoTapAccessibilityService : AccessibilityService() {
     private val tapRunnable = object : Runnable {
         override fun run() {
             if (isRunning) {
-                performDoubleTap(tapX, tapY)
-                handler.postDelayed(this, tapInterval)
+                // Jitter de posición: ±25 px en X e Y para evitar patrón fijo
+                val jitterX = tapX + Random.nextInt(-25, 26)
+                val jitterY = tapY + Random.nextInt(-25, 26)
+                performDoubleTap(jitterX.toFloat(), jitterY.toFloat())
+                // Jitter de tiempo: ±20 % del intervalo base
+                val jitter = (tapInterval * 0.20).toLong()
+                val next   = tapInterval + Random.nextLong(-jitter, jitter + 1)
+                handler.postDelayed(this, next.coerceAtLeast(200L))
             }
         }
     }
