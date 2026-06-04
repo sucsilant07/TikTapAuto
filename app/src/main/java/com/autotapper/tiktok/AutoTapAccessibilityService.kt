@@ -178,6 +178,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
     //   1200ms → toca "Copiar enlace"
     //   1700ms → queue.releaseAndNext() → siguiente acción pendiente si la hay
     //
+    @Suppress("DEPRECATION")
     private fun executeShare() {
         val root = rootInActiveWindow ?: run { queue.releaseAndNext(); return }
 
@@ -221,6 +222,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
     //   1000ms → click en Enviar
     //   1500ms → queue.releaseAndNext() → siguiente acción pendiente si la hay
     //
+    @Suppress("DEPRECATION")
     private fun executeChat(msg: String) {
         val root     = rootInActiveWindow ?: run { queue.releaseAndNext(); return }
         val editNode = findEditableNode(root)
@@ -274,6 +276,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
 
     // ── Helpers árbol de accesibilidad ─────────────────────────────────────
 
+    @Suppress("DEPRECATION")
     private fun findNodeByKeyword(
         node: AccessibilityNodeInfo,
         keyword: String
@@ -294,6 +297,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
         return null
     }
 
+    @Suppress("DEPRECATION")
     private fun findEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         if (node.isEditable && node.isEnabled) return node
 
