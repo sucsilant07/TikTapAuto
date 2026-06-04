@@ -109,6 +109,14 @@ class AutoTapAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+
+        // Habilita la recuperación de ventanas en tiempo de ejecución
+        // (necesario para que getWindows() devuelva el sheet de compartir)
+        serviceInfo = serviceInfo?.also { info ->
+            info.flags = info.flags or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+        }
+
         val filter = IntentFilter().apply {
             addAction(ACTION_START)
             addAction(ACTION_STOP)
@@ -172,69 +180,90 @@ class AutoTapAccessibilityService : AccessibilityService() {
 
     // ── Ejecutar: Compartir → Copiar enlace ───────────────────────────────
     //
+    // Flujo visual observado en capturas:
+    //   Botón ↗ compartir → esquina inferior derecha de la barra de chat
+    //   Sheet "Compartir" → fila de iconos: Compartir | Copiar enlace | SMS | Email…
+    //
     // Llamado solo desde processNext() con isBusy = true ya asignado.
-    // Duración total: ~1.7s
-    //   0ms    → abre sheet (tap en botón compartir)
-    //   1200ms → toca "Copiar enlace"
-    //   1700ms → queue.releaseAndNext() → siguiente acción pendiente si la hay
+    // Duración total: ~2.3s
+    //   0ms    → abre sheet (botón ↗ barra inferior)
+    //   1500ms → busca "Copiar enlace" en árbol; si falla usa coordenadas
+    //   2300ms → queue.releaseAndNext()
     //
     @Suppress("DEPRECATION")
     private fun executeShare() {
-        val root = rootInActiveWindow ?: run { queue.releaseAndNext(); return }
+        val b = screenBounds()
 
-        val shareNode = findNodeByKeyword(root, "share")
-            ?: findNodeByKeyword(root, "compartir")
-
+        // Paso 1: abrir sheet de compartir
+        // Árbol primero; si no, toca el botón ↗ en la barra inferior del Live
+        val root      = rootInActiveWindow
+        val shareNode = root?.let {
+            findNodeByKeyword(it, "share") ?: findNodeByKeyword(it, "compartir")
+        }
         if (shareNode != null) {
             shareNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         } else {
-            val bounds = screenBounds()
-            tapAt(bounds.width() * 0.93f, bounds.height() * 0.30f)
+            // Botón ↗ compartir: esquina inferior derecha de la barra de chat
+            tapAt(b.width() * 0.92f, b.height() * 0.94f)
         }
-        root.recycle()
+        root?.recycle()
 
+        // Paso 2: tocar "Copiar enlace" una vez abierto el sheet
         handler.postDelayed({
-            val sheetRoot = rootInActiveWindow ?: run { queue.releaseAndNext(); return@postDelayed }
-            val copyNode  = findNodeByKeyword(sheetRoot, "copy link")
-                ?: findNodeByKeyword(sheetRoot, "copiar enlace")
-                ?: findNodeByKeyword(sheetRoot, "copy")
-                ?: findNodeByKeyword(sheetRoot, "copiar")
+            // Busca en todas las ventanas abiertas (el sheet puede ser una ventana aparte)
+            val copyNode = findNodeInAllWindows("copiar enlace")
+                ?: findNodeInAllWindows("copy link")
+                ?: findNodeInAllWindows("enlace")
+                ?: findNodeInAllWindows("copy")
+                ?: findNodeInAllWindows("copiar")
 
             if (copyNode != null) {
                 copyNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             } else {
-                performGlobalAction(GLOBAL_ACTION_BACK)
+                // Fallback: posición de "Copiar enlace" en el sheet (2.º icono de la fila)
+                // Basado en capturas: ~27 % ancho, ~73 % alto
+                tapAt(b.width() * 0.27f, b.height() * 0.73f)
             }
-            sheetRoot.recycle()
 
-            // Libera y dispara siguiente acción pendiente (ej. chat en espera)
-            handler.postDelayed({ queue.releaseAndNext() }, 500)
+            handler.postDelayed({ queue.releaseAndNext() }, 800)
 
-        }, 1200)
+        }, 1500)
     }
 
     // ── Ejecutar: Mensaje en chat ──────────────────────────────────────────
     //
+    // Flujo visual observado en capturas:
+    //   Campo "Escribe algo…" en barra inferior → abre teclado
+    //   Botón ➤ Enviar a la derecha del campo de texto
+    //
     // Llamado solo desde processNext() con isBusy = true ya asignado.
-    // Duración total: ~1.5s
-    //   0ms    → click en EditText
-    //   600ms  → inyecta texto con ACTION_SET_TEXT
-    //   1000ms → click en Enviar
-    //   1500ms → queue.releaseAndNext() → siguiente acción pendiente si la hay
+    // Duración total: ~2.0s
+    //   0ms    → activa el campo de chat
+    //   700ms  → inyecta texto con ACTION_SET_TEXT
+    //   1200ms → toca botón ➤ Enviar
+    //   2000ms → queue.releaseAndNext()
     //
     @Suppress("DEPRECATION")
     private fun executeChat(msg: String) {
-        val root     = rootInActiveWindow ?: run { queue.releaseAndNext(); return }
-        val editNode = findEditableNode(root)
-        root.recycle()
+        val b = screenBounds()
 
-        if (editNode == null) {
-            queue.releaseAndNext()
-            return
+        // Paso 1: activar el campo de chat
+        val root     = rootInActiveWindow
+        val editNode = root?.let { findEditableNode(it) }
+        root?.recycle()
+
+        // Guarda los bounds del EditText ANTES de que el árbol cambie con el teclado
+        val editBounds = android.graphics.Rect()
+        editNode?.getBoundsInScreen(editBounds)
+
+        if (editNode != null) {
+            editNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } else {
+            // Fallback: toca la barra "Escribe algo…" en la parte inferior del Live
+            tapAt(b.width() * 0.40f, b.height() * 0.94f)
         }
 
-        editNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-
+        // Paso 2: inyectar texto
         handler.postDelayed({
             val args = Bundle().apply {
                 putCharSequence(
@@ -242,28 +271,35 @@ class AutoTapAccessibilityService : AccessibilityService() {
                     msg
                 )
             }
-            editNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            // Intenta con el nodo guardado; si está reciclado busca de nuevo
+            val targetNode = if (editNode != null && editNode.isEnabled) {
+                editNode
+            } else {
+                rootInActiveWindow?.let { findEditableNode(it) }
+            }
+            targetNode?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
+            // Paso 3: tocar el botón ➤ Enviar
             handler.postDelayed({
-                val freshRoot = rootInActiveWindow
-                val sendNode  = freshRoot?.let {
-                    findNodeByKeyword(it, "send")
-                        ?: findNodeByKeyword(it, "enviar")
-                        ?: findNodeByKeyword(it, "publish")
-                }
+                // Busca en árbol: "send", "enviar", "publish"
+                val sendNode = findNodeInAllWindows("send")
+                    ?: findNodeInAllWindows("enviar")
+                    ?: findNodeInAllWindows("publish")
+
                 if (sendNode != null) {
                     sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                } else if (!editBounds.isEmpty) {
+                    // Fallback relativo: botón ➤ está a la derecha del EditText, misma altura
+                    tapAt(editBounds.right.toFloat() + (b.width() * 0.08f), editBounds.centerY().toFloat())
                 } else {
-                    val b = screenBounds()
-                    tapAt(b.width() * 0.92f, b.height() * 0.935f)
+                    // Fallback absoluto: ~93 % ancho, justo encima del teclado (~57 % alto)
+                    tapAt(b.width() * 0.93f, b.height() * 0.57f)
                 }
-                freshRoot?.recycle()
 
-                // Libera y dispara siguiente acción pendiente (ej. share en espera)
-                handler.postDelayed({ queue.releaseAndNext() }, 500)
+                handler.postDelayed({ queue.releaseAndNext() }, 800)
 
-            }, 400)
-        }, 600)
+            }, 500)
+        }, 700)
     }
 
     // ── Tap genérico por coordenadas ───────────────────────────────────────
@@ -275,6 +311,23 @@ class AutoTapAccessibilityService : AccessibilityService() {
     }
 
     // ── Helpers árbol de accesibilidad ─────────────────────────────────────
+
+    /**
+     * Busca un nodo por keyword en TODAS las ventanas accesibles.
+     * Necesario porque el sheet de compartir de TikTok abre en una ventana separada
+     * y rootInActiveWindow solo devuelve la ventana activa superior.
+     */
+    @Suppress("DEPRECATION")
+    private fun findNodeInAllWindows(keyword: String): AccessibilityNodeInfo? {
+        val wins = windows ?: return null
+        for (window in wins) {
+            val root = window.root ?: continue
+            val found = findNodeByKeyword(root, keyword)
+            root.recycle()
+            if (found != null) return found
+        }
+        return null
+    }
 
     @Suppress("DEPRECATION")
     private fun findNodeByKeyword(
