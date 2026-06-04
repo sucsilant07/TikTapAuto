@@ -11,7 +11,7 @@
         android:padding="24dp"
         android:gravity="center_horizontal">
 
-        <!-- Logo / Título -->
+        <!-- Título -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -24,7 +24,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Tap Tap automático para TikTok Live"
+            android:text="Tap Tap · Compartir · Chat automático"
             android:textSize="14sp"
             android:textColor="#aaaaaa"
             android:layout_marginBottom="28dp" />
@@ -41,7 +41,7 @@
             android:textColor="@android:color/white"
             android:layout_marginBottom="12dp" />
 
-        <!-- Estado actual del tap -->
+        <!-- Estado actual -->
         <TextView
             android:id="@+id/tv_status"
             android:layout_width="match_parent"
@@ -55,15 +55,24 @@
             android:textColor="@android:color/white"
             android:layout_marginBottom="24dp" />
 
-        <!-- Control de velocidad -->
+        <!-- ══════════ Sección: Tap Tap ══════════ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="❤ TAP TAP"
+            android:textSize="13sp"
+            android:textColor="#fe2c55"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
         <TextView
             android:id="@+id/tv_interval"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Velocidad: un tap tap cada 800ms"
-            android:textSize="15sp"
+            android:text="Un tap tap cada 800 ms"
+            android:textSize="14sp"
             android:textColor="#dddddd"
-            android:layout_marginBottom="8dp" />
+            android:layout_marginBottom="6dp" />
 
         <SeekBar
             android:id="@+id/seekbar_interval"
@@ -71,30 +80,131 @@
             android:layout_height="wrap_content"
             android:progressTint="#fe2c55"
             android:thumbTint="#fe2c55"
+            android:layout_marginBottom="20dp" />
+
+        <!-- ══════════ Sección: Compartir ══════════ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="↗ COMPARTIR"
+            android:textSize="13sp"
+            android:textColor="#00b0ff"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:id="@+id/tv_share_interval"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Compartir cada 3:00 min"
+            android:textSize="14sp"
+            android:textColor="#dddddd"
+            android:layout_marginBottom="6dp" />
+
+        <SeekBar
+            android:id="@+id/seekbar_share"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="9"
+            android:progress="2"
+            android:progressTint="#00b0ff"
+            android:thumbTint="#00b0ff"
+            android:layout_marginBottom="20dp" />
+
+        <!-- ══════════ Sección: Chat ══════════ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="💬 MENSAJES EN CHAT"
+            android:textSize="13sp"
+            android:textColor="#69f0ae"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:id="@+id/tv_chat_interval"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Mensaje cada 2:00 min"
+            android:textSize="14sp"
+            android:textColor="#dddddd"
+            android:layout_marginBottom="6dp" />
+
+        <SeekBar
+            android:id="@+id/seekbar_chat"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="9"
+            android:progress="1"
+            android:progressTint="#69f0ae"
+            android:thumbTint="#69f0ae"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Agregar frase -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+
+            <EditText
+                android:id="@+id/et_new_phrase"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Escribe una frase para el chat..."
+                android:textColor="@android:color/white"
+                android:textColorHint="#666666"
+                android:background="#2a2a3e"
+                android:padding="12dp"
+                android:textSize="14sp"
+                android:inputType="text"
+                android:imeOptions="actionDone"
+                android:layout_marginEnd="8dp" />
+
+            <Button
+                android:id="@+id/btn_add_phrase"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="+"
+                android:textSize="22sp"
+                android:textColor="@android:color/white"
+                android:backgroundTint="#69f0ae"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp" />
+        </LinearLayout>
+
+        <!-- Lista de frases -->
+        <LinearLayout
+            android:id="@+id/ll_phrases"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
             android:layout_marginBottom="28dp" />
 
-        <!-- Botón principal -->
+        <!-- ══════════ Botón principal ══════════ -->
         <Button
             android:id="@+id/btn_start_stop"
             android:layout_width="match_parent"
             android:layout_height="64dp"
-            android:text="INICIAR TAP TAP"
+            android:text="INICIAR"
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="@android:color/white"
             android:backgroundTint="@android:color/holo_green_dark"
-            android:layout_marginBottom="28dp" />
+            android:layout_marginBottom="20dp" />
 
         <!-- Instrucciones -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Cómo usar:\n\n1. Toca el texto rojo para activar el\n   Servicio de accesibilidad\n2. Otorga el permiso de superposición\n   cuando se solicite\n3. Ajusta la velocidad con el slider\n4. Presiona INICIAR TAP TAP\n5. TikTok se abre automáticamente\n6. Ve a un Live — los corazones\n   se enviarán solos\n7. Toca el botón rojo flotante\n   para detener en cualquier momento"
+            android:text="Cómo usar:\n\n1. Activa el Servicio de accesibilidad\n2. Otorga el permiso de superposición\n3. Configura los intervalos y agrega frases\n4. Presiona INICIAR — TikTok se abre solo\n5. Entra a un Live y toca el botón ▶ verde\n   que flota en pantalla\n6. Las acciones comienzan automáticamente\n7. Toca el botón ✕ rojo para detener"
             android:textSize="13sp"
             android:textColor="#aaaaaa"
             android:lineSpacingMultiplier="1.6"
             android:background="#2a2a3e"
-            android:padding="16dp" />
+            android:padding="16dp"
+            android:layout_marginBottom="16dp" />
 
     </LinearLayout>
 </ScrollView>
