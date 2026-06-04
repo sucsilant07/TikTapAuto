@@ -19,8 +19,8 @@ import kotlin.random.Random
 class AutoTapAccessibilityService : AccessibilityService() {
 
     companion object {
-        const val ACTION_START = "com.autotapper.tiktok.START"
-        const val ACTION_STOP  = "com.autotapper.tiktok.STOP"
+        const val ACTION_START         = "com.autotapper.tiktok.START"
+        const val ACTION_STOP          = "com.autotapper.tiktok.STOP"
         const val EXTRA_TAP_X          = "tap_x"
         const val EXTRA_TAP_Y          = "tap_y"
         const val EXTRA_INTERVAL       = "interval"
@@ -41,13 +41,24 @@ class AutoTapAccessibilityService : AccessibilityService() {
     private var chatInterval  = 120_000L
     private var phrases       = listOf<String>()
 
+    /**
+     * Mutex liviano: mientras share o chat están en progreso el tap-tap
+     * salta su ciclo pero sigue reprogramándose, evitando conflictos de gestos.
+     */
+    @Volatile private var isBusy = false
+
     // ── Tap tap continuo ───────────────────────────────────────────────────
+
     private val tapRunnable = object : Runnable {
         override fun run() {
             if (!isRunning) return
-            val jx = tapX + Random.nextInt(-25, 26)
-            val jy = tapY + Random.nextInt(-25, 26)
-            performDoubleTap(jx, jy)
+            if (!isBusy) {
+                // Solo toca si no hay otra acción en curso
+                val jx = tapX + Random.nextInt(-25, 26)
+                val jy = tapY + Random.nextInt(-25, 26)
+                performDoubleTap(jx, jy)
+            }
+            // Siempre reprograma — nunca se pierde el ciclo
             val jitter = (tapInterval * 0.20).toLong()
             val next   = tapInterval + Random.nextLong(-jitter, jitter + 1)
             handler.postDelayed(this, next.coerceAtLeast(200L))
@@ -55,6 +66,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
     }
 
     // ── Compartir ──────────────────────────────────────────────────────────
+
     private val shareRunnable = object : Runnable {
         override fun run() {
             if (!isRunning) return
@@ -66,6 +78,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
     }
 
     // ── Mensaje en chat ────────────────────────────────────────────────────
+
     private val chatRunnable = object : Runnable {
         override fun run() {
             if (!isRunning || phrases.isEmpty()) return
@@ -75,6 +88,8 @@ class AutoTapAccessibilityService : AccessibilityService() {
             handler.postDelayed(this, next.coerceAtLeast(30_000L))
         }
     }
+
+    // ── Receiver ──────────────────────────────────────────────────────────
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -117,17 +132,17 @@ class AutoTapAccessibilityService : AccessibilityService() {
 
     private fun startActions() {
         isRunning = true
+        isBusy    = false
         handler.post(tapRunnable)
-        if (shareInterval > 0) {
+        if (shareInterval > 0)
             handler.postDelayed(shareRunnable, shareInterval)
-        }
-        if (chatInterval > 0 && phrases.isNotEmpty()) {
+        if (chatInterval > 0 && phrases.isNotEmpty())
             handler.postDelayed(chatRunnable, chatInterval)
-        }
     }
 
     private fun stopActions() {
         isRunning = false
+        isBusy    = false
         handler.removeCallbacks(tapRunnable)
         handler.removeCallbacks(shareRunnable)
         handler.removeCallbacks(chatRunnable)
@@ -136,17 +151,20 @@ class AutoTapAccessibilityService : AccessibilityService() {
     // ── Doble tap (corazones) ──────────────────────────────────────────────
 
     private fun performDoubleTap(x: Float, y: Float) {
-        val path = Path().apply { moveTo(x, y) }
+        val path  = Path().apply { moveTo(x, y) }
         val first = GestureDescription.StrokeDescription(path, 0L, 50L)
         dispatchGesture(
             GestureDescription.Builder().addStroke(first).build(),
             object : GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
-                    if (!isRunning) return
+                    if (!isRunning || isBusy) return
                     handler.postDelayed({
-                        if (!isRunning) return@postDelayed
+                        if (!isRunning || isBusy) return@postDelayed
                         val second = GestureDescription.StrokeDescription(path, 0L, 50L)
-                        dispatchGesture(GestureDescription.Builder().addStroke(second).build(), null, null)
+                        dispatchGesture(
+                            GestureDescription.Builder().addStroke(second).build(),
+                            null, null
+                        )
                     }, 120)
                 }
             },
@@ -154,12 +172,18 @@ class AutoTapAccessibilityService : AccessibilityService() {
         )
     }
 
-    // ── Compartir ──────────────────────────────────────────────────────────
-
+    // ── Compartir → Copiar enlace ──────────────────────────────────────────
+    //
+    // Duración total de la acción: ~1.8s
+    //   0ms    → abre sheet (tap en botón compartir)
+    //   1200ms → toca "Copiar enlace" dentro del sheet
+    //   1700ms → libera el mutex
+    //
     private fun performShare() {
-        val root = rootInActiveWindow ?: return
+        isBusy = true
 
-        // Paso 1: abre el sheet de compartir
+        val root = rootInActiveWindow ?: run { isBusy = false; return }
+
         val shareNode = findNodeByKeyword(root, "share")
             ?: findNodeByKeyword(root, "compartir")
 
@@ -171,75 +195,98 @@ class AutoTapAccessibilityService : AccessibilityService() {
         }
         root.recycle()
 
-        // Paso 2: espera que el sheet abra y toca "Copiar enlace"
+        // Espera a que el sheet abra completamente
         handler.postDelayed({
-            val sheetRoot = rootInActiveWindow ?: return@postDelayed
+            val sheetRoot = rootInActiveWindow ?: run { isBusy = false; return@postDelayed }
             val copyNode = findNodeByKeyword(sheetRoot, "copy link")
                 ?: findNodeByKeyword(sheetRoot, "copiar enlace")
                 ?: findNodeByKeyword(sheetRoot, "copy")
                 ?: findNodeByKeyword(sheetRoot, "copiar")
+
             if (copyNode != null) {
                 copyNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             } else {
-                // Si no encuentra el nodo cierra el sheet sin hacer nada
                 performGlobalAction(GLOBAL_ACTION_BACK)
             }
             sheetRoot.recycle()
+
+            // Libera el mutex después de que el tap/back se procese
+            handler.postDelayed({ isBusy = false }, 500)
+
         }, 1200)
     }
 
     // ── Mensaje en chat ────────────────────────────────────────────────────
-
+    //
+    // Duración total de la acción: ~1.6s
+    //   0ms    → click en EditText (abre teclado)
+    //   600ms  → inyecta el texto con ACTION_SET_TEXT
+    //   1000ms → click en botón Enviar
+    //   1500ms → libera el mutex
+    //
     private fun performChatMessage(msg: String) {
-        val root = rootInActiveWindow ?: return
+        isBusy = true
 
+        val root     = rootInActiveWindow ?: run { isBusy = false; return }
         val editNode = findEditableNode(root)
-        if (editNode != null) {
-            editNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        root.recycle()
 
-            handler.postDelayed({
-                val args = Bundle().apply {
-                    putCharSequence(
-                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                        msg
-                    )
-                }
-                editNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-
-                handler.postDelayed({
-                    val freshRoot = rootInActiveWindow ?: return@postDelayed
-                    val sendNode = findNodeByKeyword(freshRoot, "send")
-                        ?: findNodeByKeyword(freshRoot, "enviar")
-                        ?: findNodeByKeyword(freshRoot, "publish")
-                    if (sendNode != null) {
-                        sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    } else {
-                        // Fallback: posición típica del botón Enviar en TikTok Live
-                        val b = screenBounds()
-                        tapAt(b.width() * 0.92f, b.height() * 0.935f)
-                    }
-                    freshRoot.recycle()
-                }, 400)
-            }, 600)
-        } else {
-            // Fallback: toca el área del chat y escribe con gestos de teclado no es posible sin root.
-            // Solo se intenta si el AccessibilityService puede encontrar el nodo.
+        if (editNode == null) {
+            isBusy = false
+            return
         }
 
-        root.recycle()
+        // Paso 1: activa el campo de chat
+        editNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+
+        // Paso 2: inyecta el texto
+        handler.postDelayed({
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    msg
+                )
+            }
+            editNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+            // Paso 3: toca Enviar
+            handler.postDelayed({
+                val freshRoot = rootInActiveWindow
+                val sendNode  = freshRoot?.let {
+                    findNodeByKeyword(it, "send")
+                        ?: findNodeByKeyword(it, "enviar")
+                        ?: findNodeByKeyword(it, "publish")
+                }
+
+                if (sendNode != null) {
+                    sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                } else {
+                    val b = screenBounds()
+                    tapAt(b.width() * 0.92f, b.height() * 0.935f)
+                }
+                freshRoot?.recycle()
+
+                // Paso 4: libera el mutex tras confirmar el envío
+                handler.postDelayed({ isBusy = false }, 500)
+
+            }, 400)
+        }, 600)
     }
 
     // ── Tap genérico por coordenadas ───────────────────────────────────────
 
     private fun tapAt(x: Float, y: Float) {
-        val path = Path().apply { moveTo(x, y) }
+        val path   = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0L, 50L)
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
-    // ── Helpers de árbol de accesibilidad ─────────────────────────────────
+    // ── Helpers árbol de accesibilidad ─────────────────────────────────────
 
-    private fun findNodeByKeyword(node: AccessibilityNodeInfo, keyword: String): AccessibilityNodeInfo? {
+    private fun findNodeByKeyword(
+        node: AccessibilityNodeInfo,
+        keyword: String
+    ): AccessibilityNodeInfo? {
         val desc = node.contentDescription?.toString()?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase() ?: ""
         if (desc.contains(keyword) || text.contains(keyword)) return node
