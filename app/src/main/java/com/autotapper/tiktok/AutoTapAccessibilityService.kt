@@ -42,10 +42,19 @@ class AutoTapAccessibilityService : AccessibilityService() {
     private var phrases       = listOf<String>()
 
     /**
-     * Mutex liviano: mientras share o chat están en progreso el tap-tap
-     * salta su ciclo pero sigue reprogramándose, evitando conflictos de gestos.
+     * Cola de acciones con prioridad: share > chat.
+     *
+     * - isBusy     → hay una acción (share o chat) ejecutándose ahora mismo.
+     * - pendingShare → se pidió compartir mientras había otra acción en curso.
+     * - pendingChat  → mensaje de chat esperando turno (se descarta si ya hay uno pendiente).
+     *
+     * Cuando una acción termina llama a releaseAndNext(), que libera el mutex
+     * y arranca la siguiente acción pendiente respetando la jerarquía:
+     *   share primero → chat segundo → tap-tap siempre cede el paso.
      */
-    @Volatile private var isBusy = false
+    @Volatile private var isBusy      = false
+    @Volatile private var pendingShare = false
+    @Volatile private var pendingChat: String? = null
 
     // ── Tap tap continuo ───────────────────────────────────────────────────
 
@@ -70,7 +79,9 @@ class AutoTapAccessibilityService : AccessibilityService() {
     private val shareRunnable = object : Runnable {
         override fun run() {
             if (!isRunning) return
-            performShare()
+            // Encola la acción; si hay algo en curso esperará su turno
+            pendingShare = true
+            processNext()
             val jitter = (shareInterval * 0.15).toLong()
             val next   = shareInterval + Random.nextLong(-jitter, jitter + 1)
             handler.postDelayed(this, next.coerceAtLeast(30_000L))
@@ -82,7 +93,11 @@ class AutoTapAccessibilityService : AccessibilityService() {
     private val chatRunnable = object : Runnable {
         override fun run() {
             if (!isRunning || phrases.isEmpty()) return
-            performChatMessage(phrases[Random.nextInt(phrases.size)])
+            // Solo encola si no hay ya un mensaje esperando
+            if (pendingChat == null) {
+                pendingChat = phrases[Random.nextInt(phrases.size)]
+            }
+            processNext()
             val jitter = (chatInterval * 0.15).toLong()
             val next   = chatInterval + Random.nextLong(-jitter, jitter + 1)
             handler.postDelayed(this, next.coerceAtLeast(30_000L))
@@ -131,8 +146,10 @@ class AutoTapAccessibilityService : AccessibilityService() {
     // ── Control ────────────────────────────────────────────────────────────
 
     private fun startActions() {
-        isRunning = true
-        isBusy    = false
+        isRunning    = true
+        isBusy       = false
+        pendingShare = false
+        pendingChat  = null
         handler.post(tapRunnable)
         if (shareInterval > 0)
             handler.postDelayed(shareRunnable, shareInterval)
@@ -141,11 +158,43 @@ class AutoTapAccessibilityService : AccessibilityService() {
     }
 
     private fun stopActions() {
-        isRunning = false
-        isBusy    = false
+        isRunning    = false
+        isBusy       = false
+        pendingShare = false
+        pendingChat  = null
         handler.removeCallbacks(tapRunnable)
         handler.removeCallbacks(shareRunnable)
         handler.removeCallbacks(chatRunnable)
+    }
+
+    // ── Cola de prioridad: share > chat ────────────────────────────────────
+
+    /**
+     * Intenta iniciar la siguiente acción pendiente.
+     * Si ya hay algo en curso (isBusy) no hace nada —
+     * releaseAndNext() la llamará de nuevo al terminar.
+     */
+    private fun processNext() {
+        if (isBusy || !isRunning) return
+        when {
+            pendingShare -> {
+                pendingShare = false
+                isBusy = true
+                executeShare()
+            }
+            pendingChat != null -> {
+                val msg = pendingChat!!
+                pendingChat = null
+                isBusy = true
+                executeChat(msg)
+            }
+        }
+    }
+
+    /** Libera el mutex y arranca la siguiente acción pendiente si la hay. */
+    private fun releaseAndNext() {
+        isBusy = false
+        processNext()
     }
 
     // ── Doble tap (corazones) ──────────────────────────────────────────────
@@ -172,17 +221,16 @@ class AutoTapAccessibilityService : AccessibilityService() {
         )
     }
 
-    // ── Compartir → Copiar enlace ──────────────────────────────────────────
+    // ── Ejecutar: Compartir → Copiar enlace ───────────────────────────────
     //
-    // Duración total de la acción: ~1.8s
+    // Llamado solo desde processNext() con isBusy = true ya asignado.
+    // Duración total: ~1.7s
     //   0ms    → abre sheet (tap en botón compartir)
-    //   1200ms → toca "Copiar enlace" dentro del sheet
-    //   1700ms → libera el mutex
+    //   1200ms → toca "Copiar enlace"
+    //   1700ms → releaseAndNext() → siguiente acción pendiente si la hay
     //
-    private fun performShare() {
-        isBusy = true
-
-        val root = rootInActiveWindow ?: run { isBusy = false; return }
+    private fun executeShare() {
+        val root = rootInActiveWindow ?: run { releaseAndNext(); return }
 
         val shareNode = findNodeByKeyword(root, "share")
             ?: findNodeByKeyword(root, "compartir")
@@ -195,10 +243,9 @@ class AutoTapAccessibilityService : AccessibilityService() {
         }
         root.recycle()
 
-        // Espera a que el sheet abra completamente
         handler.postDelayed({
-            val sheetRoot = rootInActiveWindow ?: run { isBusy = false; return@postDelayed }
-            val copyNode = findNodeByKeyword(sheetRoot, "copy link")
+            val sheetRoot = rootInActiveWindow ?: run { releaseAndNext(); return@postDelayed }
+            val copyNode  = findNodeByKeyword(sheetRoot, "copy link")
                 ?: findNodeByKeyword(sheetRoot, "copiar enlace")
                 ?: findNodeByKeyword(sheetRoot, "copy")
                 ?: findNodeByKeyword(sheetRoot, "copiar")
@@ -210,36 +257,33 @@ class AutoTapAccessibilityService : AccessibilityService() {
             }
             sheetRoot.recycle()
 
-            // Libera el mutex después de que el tap/back se procese
-            handler.postDelayed({ isBusy = false }, 500)
+            // Libera y dispara siguiente acción pendiente (ej. chat en espera)
+            handler.postDelayed(::releaseAndNext, 500)
 
         }, 1200)
     }
 
-    // ── Mensaje en chat ────────────────────────────────────────────────────
+    // ── Ejecutar: Mensaje en chat ──────────────────────────────────────────
     //
-    // Duración total de la acción: ~1.6s
-    //   0ms    → click en EditText (abre teclado)
-    //   600ms  → inyecta el texto con ACTION_SET_TEXT
-    //   1000ms → click en botón Enviar
-    //   1500ms → libera el mutex
+    // Llamado solo desde processNext() con isBusy = true ya asignado.
+    // Duración total: ~1.5s
+    //   0ms    → click en EditText
+    //   600ms  → inyecta texto con ACTION_SET_TEXT
+    //   1000ms → click en Enviar
+    //   1500ms → releaseAndNext() → siguiente acción pendiente si la hay
     //
-    private fun performChatMessage(msg: String) {
-        isBusy = true
-
-        val root     = rootInActiveWindow ?: run { isBusy = false; return }
+    private fun executeChat(msg: String) {
+        val root     = rootInActiveWindow ?: run { releaseAndNext(); return }
         val editNode = findEditableNode(root)
         root.recycle()
 
         if (editNode == null) {
-            isBusy = false
+            releaseAndNext()
             return
         }
 
-        // Paso 1: activa el campo de chat
         editNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
 
-        // Paso 2: inyecta el texto
         handler.postDelayed({
             val args = Bundle().apply {
                 putCharSequence(
@@ -249,7 +293,6 @@ class AutoTapAccessibilityService : AccessibilityService() {
             }
             editNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
-            // Paso 3: toca Enviar
             handler.postDelayed({
                 val freshRoot = rootInActiveWindow
                 val sendNode  = freshRoot?.let {
@@ -257,7 +300,6 @@ class AutoTapAccessibilityService : AccessibilityService() {
                         ?: findNodeByKeyword(it, "enviar")
                         ?: findNodeByKeyword(it, "publish")
                 }
-
                 if (sendNode != null) {
                     sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 } else {
@@ -266,8 +308,8 @@ class AutoTapAccessibilityService : AccessibilityService() {
                 }
                 freshRoot?.recycle()
 
-                // Paso 4: libera el mutex tras confirmar el envío
-                handler.postDelayed({ isBusy = false }, 500)
+                // Libera y dispara siguiente acción pendiente (ej. share en espera)
+                handler.postDelayed(::releaseAndNext, 500)
 
             }, 400)
         }, 600)
