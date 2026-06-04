@@ -41,33 +41,22 @@ class AutoTapAccessibilityService : AccessibilityService() {
     private var chatInterval  = 120_000L
     private var phrases       = listOf<String>()
 
-    /**
-     * Cola de acciones con prioridad: share > chat.
-     *
-     * - isBusy     → hay una acción (share o chat) ejecutándose ahora mismo.
-     * - pendingShare → se pidió compartir mientras había otra acción en curso.
-     * - pendingChat  → mensaje de chat esperando turno (se descarta si ya hay uno pendiente).
-     *
-     * Cuando una acción termina llama a releaseAndNext(), que libera el mutex
-     * y arranca la siguiente acción pendiente respetando la jerarquía:
-     *   share primero → chat segundo → tap-tap siempre cede el paso.
-     */
-    @Volatile private var isBusy      = false
-    @Volatile private var pendingShare = false
-    @Volatile private var pendingChat: String? = null
+    /** Delega toda la lógica de cola y prioridad a ActionQueue (clase pura, testeable). */
+    private val queue = ActionQueue(
+        onExecuteShare = ::executeShare,
+        onExecuteChat  = ::executeChat
+    )
 
     // ── Tap tap continuo ───────────────────────────────────────────────────
 
     private val tapRunnable = object : Runnable {
         override fun run() {
             if (!isRunning) return
-            if (!isBusy) {
-                // Solo toca si no hay otra acción en curso
+            if (!queue.isBusy) {
                 val jx = tapX + Random.nextInt(-25, 26)
                 val jy = tapY + Random.nextInt(-25, 26)
                 performDoubleTap(jx, jy)
             }
-            // Siempre reprograma — nunca se pierde el ciclo
             val jitter = (tapInterval * 0.20).toLong()
             val next   = tapInterval + Random.nextLong(-jitter, jitter + 1)
             handler.postDelayed(this, next.coerceAtLeast(200L))
@@ -79,9 +68,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
     private val shareRunnable = object : Runnable {
         override fun run() {
             if (!isRunning) return
-            // Encola la acción; si hay algo en curso esperará su turno
-            pendingShare = true
-            processNext()
+            queue.enqueueShare()
             val jitter = (shareInterval * 0.15).toLong()
             val next   = shareInterval + Random.nextLong(-jitter, jitter + 1)
             handler.postDelayed(this, next.coerceAtLeast(30_000L))
@@ -93,11 +80,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
     private val chatRunnable = object : Runnable {
         override fun run() {
             if (!isRunning || phrases.isEmpty()) return
-            // Solo encola si no hay ya un mensaje esperando
-            if (pendingChat == null) {
-                pendingChat = phrases[Random.nextInt(phrases.size)]
-            }
-            processNext()
+            queue.enqueueChat(phrases[Random.nextInt(phrases.size)])
             val jitter = (chatInterval * 0.15).toLong()
             val next   = chatInterval + Random.nextLong(-jitter, jitter + 1)
             handler.postDelayed(this, next.coerceAtLeast(30_000L))
@@ -146,10 +129,8 @@ class AutoTapAccessibilityService : AccessibilityService() {
     // ── Control ────────────────────────────────────────────────────────────
 
     private fun startActions() {
-        isRunning    = true
-        isBusy       = false
-        pendingShare = false
-        pendingChat  = null
+        isRunning = true
+        queue.reset()
         handler.post(tapRunnable)
         if (shareInterval > 0)
             handler.postDelayed(shareRunnable, shareInterval)
@@ -158,43 +139,11 @@ class AutoTapAccessibilityService : AccessibilityService() {
     }
 
     private fun stopActions() {
-        isRunning    = false
-        isBusy       = false
-        pendingShare = false
-        pendingChat  = null
+        isRunning = false
+        queue.reset()
         handler.removeCallbacks(tapRunnable)
         handler.removeCallbacks(shareRunnable)
         handler.removeCallbacks(chatRunnable)
-    }
-
-    // ── Cola de prioridad: share > chat ────────────────────────────────────
-
-    /**
-     * Intenta iniciar la siguiente acción pendiente.
-     * Si ya hay algo en curso (isBusy) no hace nada —
-     * releaseAndNext() la llamará de nuevo al terminar.
-     */
-    private fun processNext() {
-        if (isBusy || !isRunning) return
-        when {
-            pendingShare -> {
-                pendingShare = false
-                isBusy = true
-                executeShare()
-            }
-            pendingChat != null -> {
-                val msg = pendingChat!!
-                pendingChat = null
-                isBusy = true
-                executeChat(msg)
-            }
-        }
-    }
-
-    /** Libera el mutex y arranca la siguiente acción pendiente si la hay. */
-    private fun releaseAndNext() {
-        isBusy = false
-        processNext()
     }
 
     // ── Doble tap (corazones) ──────────────────────────────────────────────
@@ -206,9 +155,9 @@ class AutoTapAccessibilityService : AccessibilityService() {
             GestureDescription.Builder().addStroke(first).build(),
             object : GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
-                    if (!isRunning || isBusy) return
+                    if (!isRunning || queue.isBusy) return
                     handler.postDelayed({
-                        if (!isRunning || isBusy) return@postDelayed
+                        if (!isRunning || queue.isBusy) return@postDelayed
                         val second = GestureDescription.StrokeDescription(path, 0L, 50L)
                         dispatchGesture(
                             GestureDescription.Builder().addStroke(second).build(),
@@ -227,10 +176,10 @@ class AutoTapAccessibilityService : AccessibilityService() {
     // Duración total: ~1.7s
     //   0ms    → abre sheet (tap en botón compartir)
     //   1200ms → toca "Copiar enlace"
-    //   1700ms → releaseAndNext() → siguiente acción pendiente si la hay
+    //   1700ms → queue.releaseAndNext() → siguiente acción pendiente si la hay
     //
     private fun executeShare() {
-        val root = rootInActiveWindow ?: run { releaseAndNext(); return }
+        val root = rootInActiveWindow ?: run { queue.releaseAndNext(); return }
 
         val shareNode = findNodeByKeyword(root, "share")
             ?: findNodeByKeyword(root, "compartir")
@@ -244,7 +193,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
         root.recycle()
 
         handler.postDelayed({
-            val sheetRoot = rootInActiveWindow ?: run { releaseAndNext(); return@postDelayed }
+            val sheetRoot = rootInActiveWindow ?: run { queue.releaseAndNext(); return@postDelayed }
             val copyNode  = findNodeByKeyword(sheetRoot, "copy link")
                 ?: findNodeByKeyword(sheetRoot, "copiar enlace")
                 ?: findNodeByKeyword(sheetRoot, "copy")
@@ -258,7 +207,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
             sheetRoot.recycle()
 
             // Libera y dispara siguiente acción pendiente (ej. chat en espera)
-            handler.postDelayed(::releaseAndNext, 500)
+            handler.postDelayed({ queue.releaseAndNext() }, 500)
 
         }, 1200)
     }
@@ -270,15 +219,15 @@ class AutoTapAccessibilityService : AccessibilityService() {
     //   0ms    → click en EditText
     //   600ms  → inyecta texto con ACTION_SET_TEXT
     //   1000ms → click en Enviar
-    //   1500ms → releaseAndNext() → siguiente acción pendiente si la hay
+    //   1500ms → queue.releaseAndNext() → siguiente acción pendiente si la hay
     //
     private fun executeChat(msg: String) {
-        val root     = rootInActiveWindow ?: run { releaseAndNext(); return }
+        val root     = rootInActiveWindow ?: run { queue.releaseAndNext(); return }
         val editNode = findEditableNode(root)
         root.recycle()
 
         if (editNode == null) {
-            releaseAndNext()
+            queue.releaseAndNext()
             return
         }
 
@@ -309,7 +258,7 @@ class AutoTapAccessibilityService : AccessibilityService() {
                 freshRoot?.recycle()
 
                 // Libera y dispara siguiente acción pendiente (ej. share en espera)
-                handler.postDelayed(::releaseAndNext, 500)
+                handler.postDelayed({ queue.releaseAndNext() }, 500)
 
             }, 400)
         }, 600)
